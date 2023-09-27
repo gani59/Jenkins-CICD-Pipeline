@@ -1,0 +1,61 @@
+pipeline {
+	agent any
+	environment {
+		AWS_ACCOUNT_ID="093471887101"
+		AWS_DEFAULT_REGION="us-east-1"
+		REPOSITORY_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+	}
+	parameters {
+		string(name: 'Branch', defaultValue: 'Dev_master', description: 'Enter the branch to deploy?')
+		choice(name: 'Service', choices: ['account-service', 'beneficiary-service', 'config-servers', 'connector-service', 'core-apis', 'customer-service', 'enquiry-service', 'eureka-server', 'gateway-service', 'gs-service', 'id-generator-service', 'lead-service', 'loan-service', 'money-service', 'persist-service', 'product-service', 'smart-apis', 'template-service'], description: 'Select the service you want to deploy')
+		choice(name: 'environment', choices: ['sandbox'], description: 'Select the environment you want to deploy')
+	}
+
+	stages {
+		stage('Logging into AWS ECR') {
+			steps {
+				script {
+					sh "aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+				}
+			}
+		}
+
+		stage('Cloning our Repo') {
+			steps {
+				git branch: '$Branch', credentialsId: 'Github-Key', url: 'https://uniconnect-ace.visualstudio.com/uniconnect-ace/_git/uct-saga-event'
+			}
+		}
+
+		stage ('Maven Build') {
+			steps {
+			    dir("${env.WORKSPACE}/uct-transformer-axon/${Service}") {
+				sh """
+					 mvn clean install
+				"""
+			    }
+			}
+		}
+  
+		// Building Docker images
+		stage('Building image') {
+			steps{
+			    script {
+					COMMIT_ID = sh(script: "cd ${WORKSPACE}/uct-transformer-axon/${Service} && git log -n 1 --pretty=format:'%h'", returnStdout: true).trim()
+					dir("${env.WORKSPACE}/uct-transformer-axon/${Service}") {
+			            sh "cp Dockerfile target && cd target && docker build -t ${REPOSITORY_URI}/sandbox-ecr:${Service}-${COMMIT_ID}-$environment-${currentBuild.number} ."
+					}
+				}
+			}
+		}
+		
+		// Uploading Docker images into AWS ECR
+		stage('Pushing to ECR') {
+			steps{
+				script {
+					sh "docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/sandbox-ecr:${Service}-$COMMIT_ID-$environment-${currentBuild.number}"
+					sh "docker rmi ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/sandbox-ecr:${Service}-$COMMIT_ID-$environment-${currentBuild.number}"
+				}
+			}
+		}
+    }
+}

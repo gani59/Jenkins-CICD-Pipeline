@@ -1,0 +1,50 @@
+pipeline {
+	agent any
+	environment {
+		AWS_ACCOUNT_ID="093471887101"
+		AWS_DEFAULT_REGION="us-east-1"
+		AWS_ACCESS_KEY_ID= "AKIARLQ23Z36QEJDPS65"
+        AWS_SECRET_ACCESS_KEY= "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"
+		REPOSITORY_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+		BUILD_TRIGGER_BY = "${currentBuild.getBuildCauses()[0].shortDescription}"
+	}
+	parameters {
+		string(name: 'Branch', defaultValue: 'main', description: 'Enter the branch to deploy?')
+		choice(name: 'Service', choices: ['account-service', 'beneficiary-service', 'config-servers', 'connector-service', 'core-apis', 'customer-service', 'enquiry-service', 'eureka-server', 'gateway-service', 'gs-service', 'id-generator-service', 'lead-service', 'loan-service', 'money-service', 'persist-service', 'product-service', 'smart-apis', 'template-service'], description: 'Select the service you want to deploy')
+		choice(name: 'environment', choices: ['sandbox'], description: 'Select the environment you want to deploy')
+		string(name: 'Docker_tag', description: 'Enter the Docker image version to deploy')
+	}
+
+	stages {
+		stage('Logging into AWS ECR') {
+			steps {
+				script {
+					sh "aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+				}
+			}
+		}
+		
+		// Cloning Helm charts
+		stage('Cloning our devops config Repo') {
+			steps {
+				git branch: 'main', credentialsId: 'Github-Key', url: 'https://uniconnect-ace.visualstudio.com/uniconnect-ace/_git/Devops-Configs'
+			}
+		}
+		
+	    stage('Setup Dev cluster') {
+			steps { 
+				sh '''
+				    aws eks --region us-east-1 update-kubeconfig --name eks-sandbox-bastion --profile default
+                '''
+			}
+	    }
+		
+		stage('Deploy the helm chart for the service ') {
+			steps{
+				script {
+					sh "helm upgrade --install ${Service} helm/${Service} -n ${environment} -f helm/${Service}/${environment}.yaml --set imageTag=${Docker_tag}"
+				}
+			}
+		}
+    }
+}
